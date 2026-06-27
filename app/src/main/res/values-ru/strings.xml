@@ -967,6 +967,9 @@
     <string name="settings_selinux_enforcing">Enforcing</string>
     <string name="settings_selinux_permissive">Permissive</string>
     <string name="settings_selinux_disabled">Disabled</string>
+    <string name="settings_jailbreak">Jailbreak</string>
+    <string name="settings_jailbreak_desc">Загрузка KernelSU через Magica с принудительным режимом</string>
+    <string name="settings_jailbreak_running">Jailbreak выполняется…</string>
     <string name="settings_unknown">Неизвестно</string>
     <string name="settings_local_templates">Локальные шаблоны</string>
     <string name="settings_templates_loading">Чтение шаблонов</string>

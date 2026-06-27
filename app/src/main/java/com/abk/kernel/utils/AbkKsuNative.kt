@@ -43,6 +43,7 @@ object AbkKsuNative {
     external fun getControlStatus(): String?
     external fun runControlCommand(command: String): Boolean
     private external fun encryptGitHubSecretNative(secretValue: String, publicKeyBase64: String): String
+    external fun jailbreak(ksudPath: String, packageName: String, port: Int): Int
 
     @Volatile
     private var nativeBridgeAvailable = false

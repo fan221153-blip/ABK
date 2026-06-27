@@ -980,6 +980,9 @@
     <string name="settings_selinux_enforcing">Enforcing</string>
     <string name="settings_selinux_permissive">Permissive</string>
     <string name="settings_selinux_disabled">Disabled</string>
+    <string name="settings_jailbreak">Jailbreak</string>
+    <string name="settings_jailbreak_desc">Elevate via Magica to load KernelSU, then auto set enforcing</string>
+    <string name="settings_jailbreak_running">Jailbreak in progress…</string>
     <string name="settings_unknown">Unknown</string>
     <string name="settings_local_templates">Local templates</string>
     <string name="settings_templates_loading">Reading templates</string>

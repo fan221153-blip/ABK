@@ -23,6 +23,7 @@ import com.abk.kernel.data.model.*
 import com.abk.kernel.data.repository.GitHubRepository
 import com.abk.kernel.data.repository.PreferencesRepository
 import com.abk.kernel.data.repository.Result
+import com.abk.kernel.utils.AbkKsuNative
 import com.abk.kernel.utils.BuildMonitorService
 import com.abk.kernel.utils.BuildProgressUtils
 import com.abk.kernel.utils.buildDisplaySnapshot
@@ -218,6 +219,7 @@ data class MainUiState(
     val selinuxEnforcing: Boolean = true,
     val selinuxModeText: String = "",
     val umountPaths: List<String> = emptyList(),
+    val jailbreakRunning: Boolean = false,
     val appProfileTemplates: List<AppProfileTemplateItem> = emptyList(),
     val appProfileTemplatesLoading: Boolean = false,
     val appProfileTemplatesError: String? = null,
@@ -3162,6 +3164,19 @@ class MainViewModel @JvmOverloads constructor(
                     )
                 }
             }
+        }
+    }
+
+    fun triggerJailbreak() {
+        if (_uiState.value.jailbreakRunning) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(jailbreakRunning = true) }
+            withContext(Dispatchers.IO) {
+                val app = getApplication<android.app.Application>()
+                val ksudPath = File(app.applicationInfo.nativeLibraryDir, "libksud.so").absolutePath
+                AbkKsuNative.jailbreak(ksudPath, app.packageName, 5555)
+            }
+            _uiState.update { it.copy(jailbreakRunning = false) }
         }
     }
 

@@ -478,3 +478,40 @@ Java_com_abk_kernel_utils_AbkKsuNative_getHookType(JNIEnv *env, jobject thiz) {
     get_hook_type(buff, sizeof(buff));
     return env->NewStringUTF(buff);
 }
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_abk_kernel_utils_AbkKsuNative_jailbreak(
+    JNIEnv *env, jclass clazz, jstring ksudPath, jstring packageName, jint port
+) {
+    const char *ksud_path = env->GetStringUTFChars(ksudPath, nullptr);
+    const char *pkg = env->GetStringUTFChars(packageName, nullptr);
+
+    char portStr[8] = {};
+    snprintf(portStr, sizeof(portStr), "%d", port);
+
+    std::string ksudPathCopy(ksud_path ? ksud_path : "");
+    std::string pkgCopy(pkg ? pkg : "");
+
+    if (ksud_path) env->ReleaseStringUTFChars(ksudPath, ksud_path);
+    if (pkg) env->ReleaseStringUTFChars(packageName, pkg);
+
+    if (ksudPathCopy.empty() || pkgCopy.empty()) return -1;
+
+    int pid = fork();
+    if (pid > 0) {
+        int status;
+        waitpid(pid, &status, 0);
+        return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    }
+
+    if (setuid(0) != 0) _exit(1);
+
+    pid = fork();
+    if (pid > 0) _exit(0);
+
+    setsid();
+    execl(ksudPathCopy.c_str(), "ksud", "late-load", "--magica", portStr,
+          "--package-name", pkgCopy.c_str(), nullptr);
+    _exit(127);
+}

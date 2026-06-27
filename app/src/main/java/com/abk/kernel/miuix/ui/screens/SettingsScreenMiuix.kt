@@ -88,6 +88,7 @@ import com.abk.kernel.viewmodel.MainUiState
 import com.abk.kernel.viewmodel.MainViewModel
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text as MiuixText
 import top.yukonga.miuix.kmp.basic.TextButton as MiuixTextButton
 import top.yukonga.miuix.kmp.window.WindowDialog
@@ -609,6 +610,27 @@ fun SettingsScreenMiuix(
                             }
                         }
                     }
+                }
+
+                // ═══════════════════════════════════════════════════════════
+                // 4b. JAILBREAK
+                // ═══════════════════════════════════════════════════════════
+                SectionTitle(stringResource(R.string.settings_jailbreak))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    ArrowPreference(
+                        title = stringResource(R.string.settings_jailbreak),
+                        summary = stringResource(R.string.settings_jailbreak_desc),
+                        enabled = !state.jailbreakRunning,
+                        onClick = { vm.triggerJailbreak() },
+                        endActions = {
+                            if (state.jailbreakRunning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(24.dp),
+                                    strokeWidth = 2.dp
+                                )
+                            }
+                        }
+                    )
                 }
 
                 // ═══════════════════════════════════════════════════════════
