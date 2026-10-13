@@ -2,7 +2,7 @@ name: Android 内核构建-自定义
 # run-name 表达式只支持 github / inputs 两个 context，且没有 date/now 函数，
 # 所以当前 UTC+8 日期必须由派发方算好后通过 version input 传进来。
 # 兜底：version 留空时用 kernel_version.sub_level-run_number，保证名字始终可读。
-run-name: "ABK-CI ${{ inputs.version || format('{0}.{1}-{2}', inputs.kernel_version, inputs.sub_level, github.run_number) }}"
+run-name: ABK-CI ${{ inputs.version || format('{0}.{1}-{2}', inputs.kernel_version, inputs.sub_level, github.run_number) }}
 
 permissions:
   contents: write
