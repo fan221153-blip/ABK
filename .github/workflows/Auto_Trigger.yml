@@ -83,24 +83,63 @@ jobs:
           git commit -m "Update SukiSU latest SHA to ${{ steps.get_sha.outputs.sha }}" || exit 0
           git push origin sha
           
-      # - name: Trigger test_release.yml workflow
-      #   if: steps.compare.outputs.new_commit == 'true'
-      #   run: |
-      #      curl -X POST \
-      #       -H "Accept: application/vnd.github+json" \
-      #       -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-      #       -H "X-GitHub-Api-Version: 2022-11-28" \
-      #       https://api.github.com/repos/${{ github.repository }}/actions/workflows/test_release.yml/dispatches \
-      #       -d '{
-      #         "ref": "dev",
-      #         "inputs": {
-      #           "make_release": "true",
-      #           "kernelsu_variant": "SukiSU",
-      #           "kernelsu_branch": "Stable(标准)",
-      #           "version": "",
-      #           "use_zram": "false",
-      #           "use_bbg": "true",
-      #           "use_kpm": "true",
-      #           "get_manager": "true"
-      #         }
-      #       }'
+      - name: Compute auto build version (UTC+8)
+        id: auto_version
+        if: steps.compare.outputs.new_commit == 'true'
+        run: |
+          # run-name 表达式只支持 github / inputs 两个 context，且没有 date 函数，
+          # 所以当前 UTC+8 日期必须在本 runner 里算，再通过 version input 传给
+          # kernel-custom.yml，run 名字才会显示正确的构建日期。
+          BUILD_DATE=$(TZ='Asia/Shanghai' date +%Y%m%d)
+          PR_NUM=$(echo "${GITHUB_REF}" | sed -n 's#refs/pull/\([0-9]*\)/.*#\1#p')
+          if [ -n "${PR_NUM}" ]; then
+            VERSION="6.6.127-${BUILD_DATE}-pr${PR_NUM}"
+          else
+            VERSION="6.6.127-${BUILD_DATE}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Auto build version: ${VERSION}"
+
+      - name: Trigger kernel-custom.yml workflow
+        if: steps.compare.outputs.new_commit == 'true'
+        run: |
+          jq -n \
+            --arg ref "${TRIGGER_REF:-dev}" \
+            --arg version "${VERSION}" \
+            '{
+              ref: $ref,
+              inputs: {
+                android_version: "android15",
+                kernel_version: "6.6",
+                sub_level: "127",
+                os_patch_level: "2026-04",
+                revision: "",
+                kernelsu_variant: "SukiSU",
+                kernelsu_branch: "Stable(标准)",
+                custom_ref: "",
+                version: $version,
+                build_time: "",
+                virtualization_support: "off",
+                use_zram: "false",
+                use_bbg: "true",
+                use_ddk: "false",
+                use_ntsync: "false",
+                use_networking: "false",
+                use_kpm: "true",
+                use_rekernel: "false",
+                cancel_susfs: "false",
+                supp_op: "false",
+                zram_full_algo: "false",
+                zram_extra_algos: "",
+                kpm_password: "",
+                custom_external_modules: "",
+                custom_kernel_options: ""
+              }
+            }' > payload.json
+          curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/kernel-custom.yml/dispatches \
+            -d @payload.json
+          echo "kernel-custom dispatched with version=${VERSION}"
