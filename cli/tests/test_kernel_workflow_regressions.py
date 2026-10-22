@@ -116,6 +116,57 @@ class KernelWorkflowRegressionTests(unittest.TestCase):
                 source.read_text(encoding="utf-8"),
             )
 
+    def test_artifact_version_name_has_no_hardcoded_date(self):
+        """产物名必须是 <内核>.<子版本>-<标签>-<UTC+8日期>-<marker>。
+
+        回归点：曾经用写死的 '-202609202-FanZiyun'（9 位、不是合法 YYYYMMDD）
+        当版本前缀，日期一直过期，而且因为不以 X.Y.Z 开头，build.yml 里那条
+        剥前缀的 sed 从来没生效，最终烧进 boot 镜像的 UTS 名字是错的。
+        """
+        block = self._step_run_block("计算构建产物版本名")
+
+        # 日期必须现算，不能是常量。注释里可以提旧值做对照，但可执行代码不能有。
+        self.assertIn("TZ='Asia/Shanghai' date +%Y%m%d", block)
+        code = "\n".join(
+            line for line in block.splitlines()
+            if not line.lstrip().startswith("#")
+        )
+        self.assertNotIn("202609202", code)
+        self.assertNotIn("FanZiyun", code)
+
+        # 三段式骨架 + 可选 marker
+        self.assertIn(
+            'VERSION_NAME="${{ inputs.kernel_version }}.${VERSION_SUB}-${VERSION_LABEL}-${VERSION_DATE}"',
+            block,
+        )
+        self.assertIn('VERSION_NAME="${VERSION_NAME}-${VERSION_TAG}"', block)
+
+        # 子版本来自实测 SUBLEVEL，LTS 的 X 不能被当成真值写进名字
+        self.assertIn('VERSION_SUB="${ACTUAL_SUBLEVEL:-}"', block)
+
+    def test_lts_sublevel_is_resolved_before_naming(self):
+        """LTS 构建传 sub_level=X，产物名里要落成真实子版本（如 5.15.206）。"""
+        block = self._step_run_block("提取实际子版本号")
+
+        self.assertIn('if [[ ! "$ACTUAL_SUBLEVEL" =~ ^[0-9]+$ ]]', block)
+        self.assertIn("data/${{ inputs.android_version }}/${{ inputs.kernel_version }}.json", block)
+        self.assertIn('ACTUAL_SUBLEVEL="${LTS_VER##*.}"', block)
+        # 内核 Makefile 仍然有最终否决权
+        self.assertIn("SUBLEVEL = ", block)
+        self.assertIn('ACTUAL_SUBLEVEL="$EXTRACTED"', block)
+
+    def test_artifacts_use_the_shared_version_name(self):
+        """Images / AnyKernel3 / boot 镜像都用同一个版本名，且两种刷入包都要产出。"""
+        self.assertNotIn(
+            'images_name="${{ inputs.android_version }}-${{ inputs.kernel_version }}',
+            self.workflow,
+        )
+        self.assertIn('images_name="${ABK_VERSION_NAME}-Images.zip"', self.workflow)
+        self.assertIn('ZIP_NAME="${ABK_VERSION_NAME}-AnyKernel3.zip"', self.workflow)
+        for suffix in ("boot", "boot-gz", "boot-lz4"):
+            with self.subTest(suffix=suffix):
+                self.assertIn(f'cp ./{suffix}.img "../${{ABK_VERSION_NAME}}-{suffix}.img"', self.workflow)
+
     def test_android12_ntsync_compat_filters_incompatible_lockdep_hunk(self):
         block = self._step_run_block("应用 NTsync 补丁")
         self.assertIn("apply_android12_ntsync_compat", block)

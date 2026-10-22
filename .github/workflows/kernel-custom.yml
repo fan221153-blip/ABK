@@ -1,7 +1,13 @@
 name: Android 内核构建-自定义
 # run-name 表达式只支持 github / inputs 两个 context，且没有 date/now 函数，
 # 所以当前 UTC+8 日期必须由派发方算好后通过 version input 传进来。
+# 派发方（PR 编译门禁 / Auto_Trigger）负责把 version 拼成
+#   <内核>.<子版本>-<标签>-<UTC+8日期>-<marker>
+# 例如 5.15.220-Sailboat-20261022-pr48-test。真正的产物文件名在 build.yml 里
+# 用 runner 实测的 SUBLEVEL + 当前 UTC+8 日期再算一次，不依赖这里的兜底。
 # 兜底：version 留空时用 kernel_version.sub_level-run_number，保证名字始终可读。
+# 注意 run-name 必须以字面量 "ABK-CI " 起头：ABK_5.15_BACKPORT 的门禁拿
+# ^run-name:[^A-Za-z0-9]*ABK-CI 做契约预检。
 run-name: ABK-CI ${{ inputs.version || format('{0}.{1}-{2}', inputs.kernel_version, inputs.sub_level, github.run_number) }}
 
 permissions:
