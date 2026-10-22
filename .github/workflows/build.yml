@@ -86,7 +86,9 @@ on:
       build_time:
         required: false
         type: string
-        default: "Sun Dec 01 08:10:00 UTC 2024"
+        # 留空=用构建当时的真实 UTC 时间。别再钉死一个过去的常量，
+        # 那会让 boot 镜像的 UTS 时间永远停在那个日期。
+        default: ""
 
       # ==================== 功能开关 ====================
       use_zram:
@@ -1388,13 +1390,82 @@ jobs:
 
       - name: 提取实际子版本号
         run: |
+          set -euo pipefail
           ACTUAL_SUBLEVEL="${{ inputs.sub_level }}"
+
+          # LTS 构建传的是 X（表示"跟随 LTS"），不能直接写进版本名。
+          # 先按 AOSP 数据文件解析真实子版本，再让内核 Makefile 覆盖它。
+          if [[ ! "$ACTUAL_SUBLEVEL" =~ ^[0-9]+$ ]]; then
+            LTS_JSON="$GITHUB_WORKSPACE/data/${{ inputs.android_version }}/${{ inputs.kernel_version }}.json"
+            if [[ -f "$LTS_JSON" ]]; then
+              LTS_VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("lts",""))' "$LTS_JSON" 2>/dev/null || true)
+              if [[ "$LTS_VER" == "${{ inputs.kernel_version }}."* ]]; then
+                ACTUAL_SUBLEVEL="${LTS_VER##*.}"
+                echo "LTS 数据解析子版本号: $LTS_VER"
+              fi
+            fi
+          fi
+
           if [[ -f "$KERNEL_ROOT/common/Makefile" ]]; then
             EXTRACTED=$(grep '^SUBLEVEL = ' "$KERNEL_ROOT/common/Makefile" | awk '{print $3}')
             [[ -n "$EXTRACTED" ]] && ACTUAL_SUBLEVEL="$EXTRACTED"
           fi
           echo "ACTUAL_SUBLEVEL=$ACTUAL_SUBLEVEL" >> $GITHUB_ENV
           echo "实际子版本号: $ACTUAL_SUBLEVEL"
+
+      - name: 计算构建产物版本名
+        run: |
+          set -euo pipefail
+          # 产物统一命名：<内核>.<实际子版本>-<标签>-<UTC+8构建日期>-<marker>
+          # 例：5.15.220-Sailboat-20261022-pr48-test
+          #
+          # 派发方传进来的 version 可能长这样（新旧两种都见过）：
+          #   5.15.220-Sailboat-20261022-pr48-test      <- 目标形状
+          #   pr48-test                                 <- 只有 marker
+          #   5.15.220-202609202-FanZiyun-pr51-399a6d4   <- 老门禁，日期是写死的假值
+          #   -202609202-FanZiyun-pr51-399a6d4           <- 更老的门禁
+          # 不管哪种，最终都以**本 runner 实测值**为准重建：
+          #   - 子版本取 Makefile 的真实 SUBLEVEL（LTS 传 X 时也能显示 5.15.220，
+          #     而不是把字面量 X 写进名字）；
+          #   - 日期取本 runner 的 UTC+8 当前日期，不是任何写死的常量；
+          #   - 标签默认 Sailboat，可用仓库变量 ABK_VERSION_LABEL 覆盖；
+          #   - 只有 marker 从输入里继承（pr48-test / pr51-399a6d4 / sukisu<sha7>）。
+          VERSION_LABEL="${{ vars.ABK_VERSION_LABEL || 'Sailboat' }}"
+          VERSION_DATE="$(TZ='Asia/Shanghai' date +%Y%m%d)"
+          VERSION_SUB="${ACTUAL_SUBLEVEL:-}"
+          if [[ ! "$VERSION_SUB" =~ ^[0-9]+$ ]]; then
+            VERSION_SUB="${{ inputs.sub_level }}"
+          fi
+
+          VERSION_TAG="$(printf '%s' "${{ inputs.version }}" | tr -d '[:space:]')"
+          VERSION_TAG="${VERSION_TAG#-}"
+
+          # 剥掉 <内核>.<子版本>- 前缀（完整名字才有的那一段）
+          if [[ "$VERSION_TAG" =~ ^[0-9]+\.[0-9]+\.[0-9]+- ]]; then
+            VERSION_TAG="$(printf '%s' "$VERSION_TAG" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+-//')"
+          fi
+
+          # 再剥掉一层「日期段」。两种历史顺序都要认：
+          #   <标签>-<日期>-     新形状，如 Sailboat-20261022-
+          #   <日期>-<作者>-     老门禁，如 202609202-FanZiyun-（且那个日期是假的）
+          # 只剥一层，避免把 marker 里的数字误当日期继续啃。
+          if [[ "$VERSION_TAG" =~ ^[A-Za-z0-9_]+-[0-9]{6,}- ]]; then
+            VERSION_TAG="$(printf '%s' "$VERSION_TAG" | sed -E 's/^[A-Za-z0-9_]+-[0-9]{6,}-//')"
+          elif [[ "$VERSION_TAG" =~ ^[0-9]{6,}-[A-Za-z0-9_]+- ]]; then
+            VERSION_TAG="$(printf '%s' "$VERSION_TAG" | sed -E 's/^[0-9]{6,}-[A-Za-z0-9_]+-//')"
+          fi
+
+          VERSION_NAME="${{ inputs.kernel_version }}.${VERSION_SUB}-${VERSION_LABEL}-${VERSION_DATE}"
+          if [ -n "$VERSION_TAG" ]; then
+            VERSION_NAME="${VERSION_NAME}-${VERSION_TAG}"
+          fi
+          {
+            echo "ABK_VERSION_NAME=$VERSION_NAME"
+            echo "ABK_VERSION_LABEL=$VERSION_LABEL"
+            echo "ABK_VERSION_DATE=$VERSION_DATE"
+            echo "ABK_VERSION_TAG=$VERSION_TAG"
+          } >> "$GITHUB_ENV"
+          echo "构建产物版本名: $VERSION_NAME"
 
       - name: 修复 glibc 2.38 兼容性
         working-directory: ${{ env.KERNEL_ROOT }}/common
@@ -4097,7 +4168,10 @@ jobs:
             sed -i "/stable_scmversion_cmd/s/-maybe-dirty//g" ./build/kernel/kleaf/impl/stamp.bzl
           fi
 
-          VERSION_INPUT=$(echo "${{ inputs.version }}" | tr -d '[:space:]')
+          # 内核 UTS 版本串要和产物名一致：优先用上面算好的 ABK_VERSION_NAME，
+          # 而不是原始 inputs.version。后者可能只是个 marker（如 pr48-test），
+          # 直接当后缀会拼出 5.15.220pr48-test —— 缺了标签和日期。
+          VERSION_INPUT="${ABK_VERSION_NAME:-$(echo "${{ inputs.version }}" | tr -d '[:space:]')}"
           if [ -n "$VERSION_INPUT" ]; then
             CLEAN_VERSION=$(echo "$VERSION_INPUT" | sed -E 's/^[0-9]+\.[0-9]+\.[0-9]+//')
             perl -i -0777 -pe 's/(.*)echo "\$\{KERNELVERSION\}\$\{file_localversion\}\$\{config_localversion\}\$\{LOCALVERSION\}\$\{scm_version\}"/$1echo "\$\{KERNELVERSION\}'"${CLEAN_VERSION}"'"/s' ./common/scripts/setlocalversion 2>/dev/null || true
@@ -6678,18 +6752,18 @@ jobs:
           gzip -n -c -9 ./Image > ./Image.gz
           cp ./Image.gz ./bootimgs/Image.gz
 
-          if [ "${{ inputs.source_mode }}" = "custom_git" ]; then
-            images_name="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-Images.zip"
-            (
-              cd bootimgs
-              zip -9 "../$images_name" Image Image.lz4 Image.gz
-            )
-          fi
+          # 原版 img 镜像包（Image / Image.lz4 / Image.gz）对所有构建模式都产出，
+          # 不再只限 custom_git —— 这样每次构建都同时有「原版 img」和「AnyKernel3」两种刷入包。
+          images_name="${ABK_VERSION_NAME}-Images.zip"
+          (
+            cd bootimgs
+            zip -9 "../$images_name" Image Image.lz4 Image.gz
+          )
 
       - name: 创建 AnyKernel3 压缩包
         run: |
           cd $ANYKERNEL3
-          ZIP_NAME="${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-AnyKernel3.zip"
+          ZIP_NAME="${ABK_VERSION_NAME}-AnyKernel3.zip"
           mv ../Image ./Image
           zip -r "../$ZIP_NAME" ./*
 
@@ -6714,15 +6788,15 @@ jobs:
 
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
+          cp ./boot.img "../${ABK_VERSION_NAME}-boot.img"
 
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
+          cp ./boot-gz.img "../${ABK_VERSION_NAME}-boot-gz.img"
 
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img --ramdisk out/ramdisk --os_version 12.0.0 --os_patch_level "${{ inputs.os_patch_level }}"
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
+          cp ./boot-lz4.img "../${ABK_VERSION_NAME}-boot-lz4.img"
 
       - name: 构建 Boot 镜像 (Android 13+)
         if: inputs.source_mode != 'custom_git' && (inputs.android_version == 'android13' || inputs.android_version == 'android14' || inputs.android_version == 'android15' || inputs.android_version == 'android16')
@@ -6732,15 +6806,15 @@ jobs:
 
           $MKBOOTIMG --header_version 4 --kernel Image --output boot.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot.img
+          cp ./boot.img "../${ABK_VERSION_NAME}-boot.img"
 
           $MKBOOTIMG --header_version 4 --kernel Image.gz --output boot-gz.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-gz.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-gz.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-gz.img
+          cp ./boot-gz.img "../${ABK_VERSION_NAME}-boot-gz.img"
 
           $MKBOOTIMG --header_version 4 --kernel Image.lz4 --output boot-lz4.img
           $AVBTOOL add_hash_footer --partition_name boot --partition_size $((64 * 1024 * 1024)) --image boot-lz4.img --algorithm SHA256_RSA2048 --key $BOOT_SIGN_KEY_PATH
-          cp ./boot-lz4.img ../${{ inputs.android_version }}-${{ inputs.kernel_version }}.${{ inputs.sub_level }}-${{ inputs.os_patch_level }}-boot-lz4.img
+          cp ./boot-lz4.img "../${ABK_VERSION_NAME}-boot-lz4.img"
 
       - name: 打包签名内核 Bundle
         env:
@@ -6764,14 +6838,13 @@ jobs:
           [ "${{ inputs.source_mode }}" = "custom_git" ] && args+=(--require-signature)
           python3 "$GITHUB_WORKSPACE/.github/scripts/create-artifact-bundles.py" "${args[@]}"
 
-          if [ "${{ inputs.source_mode }}" = "custom_git" ]; then
-            images_count=$(find . -maxdepth 1 -type f -name '*-Images.zip.bundle.zip' | wc -l)
-            anykernel_count=$(find . -maxdepth 1 -type f -name '*-AnyKernel3.zip.bundle.zip' | wc -l)
-            if [ "$images_count" -ne 1 ] || [ "$anykernel_count" -ne 1 ]; then
-              echo "::error::Custom source 必须同时生成一个 Images bundle 和一个 AnyKernel3 bundle。"
-              rm -f ./*.bundle.zip
-              exit 1
-            fi
+          # 每次构建都应同时产出「原版 img 镜像」和「AnyKernel3」两个 bundle。
+          images_count=$(find . -maxdepth 1 -type f -name '*-Images.zip.bundle.zip' | wc -l)
+          anykernel_count=$(find . -maxdepth 1 -type f -name '*-AnyKernel3.zip.bundle.zip' | wc -l)
+          if [ "$images_count" -ne 1 ] || [ "$anykernel_count" -ne 1 ]; then
+            echo "::error::每次构建必须同时生成一个 Images bundle 和一个 AnyKernel3 bundle（当前 Images=$images_count, AnyKernel3=$anykernel_count）。"
+            rm -f ./*.bundle.zip
+            exit 1
           fi
 
       - name: 收集补丁冲突文件
@@ -6810,6 +6883,27 @@ jobs:
             LICENSE
             THIRD_PARTY_NOTICES.md
           compression-level: 9
+
+      # 直链产物：不再套 .bundle.zip，下载下来就是能直接用的 zip/img。
+      # 应用侧仍然走上面那个签名 bundle（ArtifactVerification 硬性要求
+      # .bundle.zip 才能验证签名），所以这里单独开一个 artifact，
+      # 名字就是版本名，不和 _kernel-android 那个混淆。
+      - name: 上传直链产物（不套 bundle）
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.ABK_VERSION_NAME }}
+          path: |
+            ${{ env.ABK_VERSION_NAME }}-AnyKernel3.zip
+            ${{ env.ABK_VERSION_NAME }}-Images.zip
+            ${{ env.ABK_VERSION_NAME }}-boot.img
+            ${{ env.ABK_VERSION_NAME }}-boot-gz.img
+            ${{ env.ABK_VERSION_NAME }}-boot-lz4.img
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+          if-no-files-found: warn
+          # boot*.img 会被 AVB 填充到 64MB（大量 0），压缩收益很大：
+          # 实测 268MB -> 133MB，只多花约 4 秒。
+          compression-level: 6
 
       - name: 上传补丁冲突文件
         if: always() && env.REJ_COUNT > 0

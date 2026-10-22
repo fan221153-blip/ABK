@@ -137,13 +137,15 @@ def human_manifest(payload_name: str, manifest: dict[str, object]) -> str:
 
 
 def iter_payloads(root: Path, custom_source: bool) -> list[Path]:
+    # Images.zip（原版 img 镜像包）与 AnyKernel3.zip 对所有构建模式都要打包，
+    # 这样 AOSP / custom_git 两条路径产出的刷入包集合保持一致。
     payloads: list[Path] = []
     for payload in sorted(root.glob("*")):
         if not payload.is_file() or payload.name.endswith(".bundle.zip"):
             continue
         if payload.suffix.lower() == ".img" or payload.name.endswith("AnyKernel3.zip"):
             payloads.append(payload)
-        elif custom_source and payload.name.endswith("Images.zip"):
+        elif payload.name.endswith("Images.zip"):
             payloads.append(payload)
     return payloads
 
