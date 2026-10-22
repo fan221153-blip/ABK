@@ -6901,7 +6901,9 @@ jobs:
             LICENSE
             THIRD_PARTY_NOTICES.md
           if-no-files-found: warn
-          compression-level: 0
+          # boot*.img 会被 AVB 填充到 64MB（大量 0），压缩收益很大：
+          # 实测 268MB -> 133MB，只多花约 4 秒。
+          compression-level: 6
 
       - name: 上传补丁冲突文件
         if: always() && env.REJ_COUNT > 0
