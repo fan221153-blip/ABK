@@ -6884,6 +6884,25 @@ jobs:
             THIRD_PARTY_NOTICES.md
           compression-level: 9
 
+      # 直链产物：不再套 .bundle.zip，下载下来就是能直接用的 zip/img。
+      # 应用侧仍然走上面那个签名 bundle（ArtifactVerification 硬性要求
+      # .bundle.zip 才能验证签名），所以这里单独开一个 artifact，
+      # 名字就是版本名，不和 _kernel-android 那个混淆。
+      - name: 上传直链产物（不套 bundle）
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ env.ABK_VERSION_NAME }}
+          path: |
+            ${{ env.ABK_VERSION_NAME }}-AnyKernel3.zip
+            ${{ env.ABK_VERSION_NAME }}-Images.zip
+            ${{ env.ABK_VERSION_NAME }}-boot.img
+            ${{ env.ABK_VERSION_NAME }}-boot-gz.img
+            ${{ env.ABK_VERSION_NAME }}-boot-lz4.img
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+          if-no-files-found: warn
+          compression-level: 0
+
       - name: 上传补丁冲突文件
         if: always() && env.REJ_COUNT > 0
         uses: actions/upload-artifact@v6
